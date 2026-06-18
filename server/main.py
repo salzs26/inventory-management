@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+from datetime import datetime, timedelta
+import uuid
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -80,6 +82,7 @@ class Order(BaseModel):
     actual_delivery: Optional[str] = None
     warehouse: Optional[str] = None
     category: Optional[str] = None
+    source: Optional[str] = None  # "restocking" for orders placed via the Restocking tab
 
 class DemandForecast(BaseModel):
     id: str
@@ -303,6 +306,47 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+class RestockingOrderItem(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_cost: float
+
+class CreateRestockingOrderRequest(BaseModel):
+    items: List[RestockingOrderItem]
+    total_value: float
+
+@app.post("/api/restocking/orders", response_model=Order)
+def create_restocking_order(request: CreateRestockingOrderRequest):
+    """Create a restocking order from the Restocking tab and append it to the orders list."""
+    today = datetime.now()
+    order_date = today.strftime('%Y-%m-%d')
+    # Fixed 14-day lead time for all restocking orders
+    expected_delivery = (today + timedelta(days=14)).strftime('%Y-%m-%d')
+    order_id = str(uuid.uuid4())
+    order_number = f"RST-{today.strftime('%Y%m%d')}-{order_id[:4].upper()}"
+
+    new_order = {
+        "id": order_id,
+        "order_number": order_number,
+        "customer": "Internal Restocking",
+        "items": [
+            {"name": item.name, "quantity": item.quantity, "unit_price": item.unit_cost, "sku": item.sku}
+            for item in request.items
+        ],
+        "status": "Processing",
+        "order_date": order_date,
+        "expected_delivery": expected_delivery,
+        "total_value": round(request.total_value, 2),
+        "warehouse": None,
+        "category": None,
+        "source": "restocking",
+    }
+
+    orders.append(new_order)
+    return new_order
+
 
 if __name__ == "__main__":
     import uvicorn
